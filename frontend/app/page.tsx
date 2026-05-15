@@ -58,22 +58,22 @@ export default function HomePage() {
         body: JSON.stringify({ message: content })
       });
 
-      if (!response.ok) {
-        throw new Error("Chat request failed");
-      }
+      const data = (await response.json()) as { reply?: string; detail?: string };
 
-      const data = (await response.json()) as { reply: string };
+      if (!response.ok) {
+        throw new Error(data.detail || "Chat request failed");
+      }
 
       setMessages((currentMessages) => [
         ...currentMessages,
         {
           id: Date.now() + 1,
           role: "assistant",
-          content: data.reply
+          content: data.reply || ""
         }
       ]);
-    } catch {
-      setError(copy.error);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : copy.error);
     } finally {
       setIsSending(false);
     }
