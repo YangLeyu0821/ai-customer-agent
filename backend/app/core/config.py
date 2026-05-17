@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     openai_api_key: str = ""
     openai_model: str = "gpt-4.1-mini"
+    openai_embedding_model: str = "text-embedding-v4"
     openai_timeout_seconds: float = 60
     openai_base_url: str = ""
 

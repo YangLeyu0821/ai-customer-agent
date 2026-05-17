@@ -155,6 +155,138 @@ body {
   font-size: 14px;
 }
 
+.admin-page {
+  min-height: 100vh;
+  background: #eef2f6;
+  padding: 32px;
+}
+
+.admin-shell {
+  width: min(880px, 100%);
+  margin: 0 auto;
+  overflow: hidden;
+  border: 1px solid #d5dbe5;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 42px rgba(32, 42, 58, 0.12);
+}
+
+.admin-header {
+  border-bottom: 1px solid #e3e7ee;
+  padding: 24px;
+}
+
+.admin-header h1,
+.upload-copy h2 {
+  margin: 0 0 8px;
+  line-height: 1.25;
+}
+
+.admin-header h1 {
+  font-size: 26px;
+}
+
+.upload-copy h2 {
+  font-size: 20px;
+}
+
+.admin-header p,
+.upload-copy p,
+.selected-file {
+  margin: 0;
+  color: #566171;
+}
+
+.upload-panel {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
+}
+
+.file-picker {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  border: 1px dashed #aeb8c8;
+  border-radius: 8px;
+  background: #f7f9fb;
+  cursor: pointer;
+  padding: 22px;
+}
+
+.file-picker span {
+  color: #1f7a5c;
+  font-weight: 700;
+}
+
+.file-picker input {
+  font: inherit;
+}
+
+.selected-file {
+  overflow-wrap: anywhere;
+}
+
+.upload-button {
+  width: fit-content;
+  border: 0;
+  border-radius: 8px;
+  background: #1f7a5c;
+  color: #ffffff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 0 22px;
+}
+
+.upload-button:hover {
+  background: #17684e;
+}
+
+.upload-button:disabled,
+.file-picker input:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.admin-message {
+  border-top: 1px solid #f0c7c7;
+}
+
+.upload-result {
+  border-top: 1px solid #d7eadf;
+  background: #f3fbf6;
+  padding: 18px 24px 24px;
+}
+
+.upload-result p {
+  margin: 0 0 12px;
+  color: #17684e;
+  font-weight: 700;
+}
+
+.upload-result dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.upload-result div {
+  display: grid;
+  gap: 4px;
+}
+
+.upload-result dt {
+  color: #566171;
+  font-size: 13px;
+}
+
+.upload-result dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 640px) {
   .chat-page {
     padding: 0;
@@ -177,5 +309,15 @@ body {
 
   .composer button {
     min-height: 44px;
+  }
+
+  .admin-page {
+    padding: 0;
+  }
+
+  .admin-shell {
+    min-height: 100vh;
+    border: 0;
+    border-radius: 0;
   }
 }
