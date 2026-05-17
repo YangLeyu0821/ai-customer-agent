@@ -49,6 +49,65 @@ def get_recent_messages(session_id: str) -> list[ChatMessage]:
     return [{"role": role, "content": content} for role, content in reversed(rows)]
 
 
+def list_sessions() -> list[dict[str, str | int]]:
+    init_memory_db()
+    with _db_lock, sqlite3.connect(DB_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                grouped.session_id,
+                latest.content AS last_message,
+                grouped.updated_at,
+                grouped.message_count
+            FROM (
+                SELECT
+                    session_id,
+                    MAX(id) AS latest_id,
+                    MAX(created_at) AS updated_at,
+                    COUNT(*) AS message_count
+                FROM chat_messages
+                GROUP BY session_id
+            ) AS grouped
+            JOIN chat_messages AS latest
+              ON latest.id = grouped.latest_id
+            ORDER BY grouped.latest_id DESC
+            """
+        ).fetchall()
+
+    return [
+        {
+            "session_id": session_id,
+            "last_message": last_message,
+            "updated_at": updated_at,
+            "message_count": message_count,
+        }
+        for session_id, last_message, updated_at, message_count in rows
+    ]
+
+
+def get_session_messages(session_id: str) -> list[dict[str, str]]:
+    init_memory_db()
+    with _db_lock, sqlite3.connect(DB_PATH) as connection:
+        rows = connection.execute(
+            """
+            SELECT role, content, created_at
+            FROM chat_messages
+            WHERE session_id = ?
+            ORDER BY id ASC
+            """,
+            (session_id,),
+        ).fetchall()
+
+    return [
+        {
+            "role": role,
+            "content": content,
+            "created_at": created_at,
+        }
+        for role, content, created_at in rows
+    ]
+
+
 def append_turn(session_id: str, user_message: str, assistant_reply: str) -> None:
     init_memory_db()
     with _db_lock, sqlite3.connect(DB_PATH) as connection:

@@ -225,3 +225,27 @@ def generate_customer_service_reply(
         raise OpenAIUpstreamError("OpenAI returned an empty response.")
 
     return {"reply": reply, "order": display_order}
+
+
+def stream_customer_service_reply(
+    message: str,
+    faq_context: str = "",
+    history: list[dict[str, str]] | None = None,
+):
+    result = generate_customer_service_reply(message, faq_context=faq_context, history=history)
+    reply = str(result["reply"])
+
+    # Tool calls are resolved before streaming; then we send the final answer in small chunks.
+    # This keeps RAG, memory and order-card metadata aligned with the non-streaming endpoint.
+    chunk_size = 12
+    for start in range(0, len(reply), chunk_size):
+        yield {
+            "type": "delta",
+            "content": reply[start : start + chunk_size],
+        }
+
+    yield {
+        "type": "done",
+        "reply": reply,
+        "order": result.get("order"),
+    }

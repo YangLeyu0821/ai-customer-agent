@@ -5,13 +5,13 @@ from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile
 
-from app.rag.document_loader import decode_document, split_text
+from app.rag.document_loader import extract_document_text, split_text
 from app.rag.embeddings import create_embeddings
-from app.rag.vector_store import delete_faq_chunks_by_file, upsert_faq_chunks
+from app.rag.vector_store import delete_faq_chunks_by_file, reset_faq_collection, upsert_faq_chunks
 
 FAQ_UPLOAD_DIR = Path(__file__).resolve().parents[2] / "data" / "faq_uploads"
-ALLOWED_EXTENSIONS = {".txt", ".md"}
-MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
+ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 
 
 def sanitize_filename(filename: str) -> str:
@@ -51,7 +51,7 @@ def resolve_uploaded_faq_path(filename: str) -> Path:
         raise HTTPException(status_code=400, detail="\u6587\u4ef6\u540d\u4e0d\u5408\u6cd5\u3002")
 
     if target_path.suffix.lower() not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="\u53ea\u80fd\u5220\u9664 .txt \u6216 .md \u6587\u4ef6\u3002")
+        raise HTTPException(status_code=400, detail="\u53ea\u80fd\u5220\u9664 .txt\u3001.md\u3001.pdf \u6216 .docx \u6587\u4ef6\u3002")
 
     return target_path
 
@@ -68,29 +68,15 @@ def delete_faq_file(filename: str) -> str:
     return filename
 
 
-async def save_faq_upload(file: UploadFile) -> tuple[str, str, int, int]:
-    original_filename = file.filename or ""
-    safe_filename = sanitize_filename(original_filename)
-    extension = Path(safe_filename).suffix.lower()
+def index_faq_content(original_filename: str, saved_as: str, content: bytes) -> int:
+    try:
+        text = extract_document_text(saved_as, content)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="\u65e0\u6cd5\u89e3\u6790\u6587\u6863\u6587\u672c\uff0c\u8bf7\u786e\u8ba4\u6587\u4ef6\u672a\u635f\u574f\u4e14\u5305\u542b\u53ef\u63d0\u53d6\u7684\u6587\u672c\u3002",
+        ) from exc
 
-    if extension not in ALLOWED_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="\u53ea\u652f\u6301\u4e0a\u4f20 .txt \u6216 .md \u6587\u4ef6\u3002")
-
-    content = await file.read()
-    size_bytes = len(content)
-
-    if size_bytes == 0:
-        raise HTTPException(status_code=400, detail="\u4e0a\u4f20\u6587\u4ef6\u4e0d\u80fd\u4e3a\u7a7a\u3002")
-
-    if size_bytes > MAX_FILE_SIZE_BYTES:
-        raise HTTPException(status_code=400, detail="\u6587\u4ef6\u5927\u5c0f\u4e0d\u80fd\u8d85\u8fc7 5MB\u3002")
-
-    FAQ_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    saved_as = f"{uuid4().hex}_{safe_filename}"
-    target_path = FAQ_UPLOAD_DIR / saved_as
-    target_path.write_bytes(content)
-
-    text = decode_document(content)
     chunks = split_text(text)
     if not chunks:
         raise HTTPException(status_code=400, detail="\u6587\u4ef6\u6ca1\u6709\u53ef\u7528\u7684\u6587\u672c\u5185\u5bb9\u3002")
@@ -107,4 +93,52 @@ async def save_faq_upload(file: UploadFile) -> tuple[str, str, int, int]:
     ]
     upsert_faq_chunks(chunk_ids, chunks, embeddings, metadatas)
 
-    return original_filename, saved_as, size_bytes, len(chunks)
+    return len(chunks)
+
+
+def reindex_faq_files() -> tuple[int, int]:
+    reset_faq_collection()
+
+    if not FAQ_UPLOAD_DIR.exists():
+        return 0, 0
+
+    file_count = 0
+    chunk_count = 0
+
+    for path in sorted(FAQ_UPLOAD_DIR.iterdir(), key=lambda item: item.name):
+        if not path.is_file() or path.suffix.lower() not in ALLOWED_EXTENSIONS:
+            continue
+
+        content = path.read_bytes()
+        chunks = index_faq_content(path.name, path.name, content)
+        file_count += 1
+        chunk_count += chunks
+
+    return file_count, chunk_count
+
+
+async def save_faq_upload(file: UploadFile) -> tuple[str, str, int, int]:
+    original_filename = file.filename or ""
+    safe_filename = sanitize_filename(original_filename)
+    extension = Path(safe_filename).suffix.lower()
+
+    if extension not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="\u53ea\u652f\u6301\u4e0a\u4f20 .txt\u3001.md\u3001.pdf \u6216 .docx \u6587\u4ef6\u3002")
+
+    content = await file.read()
+    size_bytes = len(content)
+
+    if size_bytes == 0:
+        raise HTTPException(status_code=400, detail="\u4e0a\u4f20\u6587\u4ef6\u4e0d\u80fd\u4e3a\u7a7a\u3002")
+
+    if size_bytes > MAX_FILE_SIZE_BYTES:
+        raise HTTPException(status_code=400, detail="\u6587\u4ef6\u5927\u5c0f\u4e0d\u80fd\u8d85\u8fc7 10MB\u3002")
+
+    FAQ_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    saved_as = f"{uuid4().hex}_{safe_filename}"
+    target_path = FAQ_UPLOAD_DIR / saved_as
+    target_path.write_bytes(content)
+
+    chunk_count = index_faq_content(original_filename, saved_as, content)
+
+    return original_filename, saved_as, size_bytes, chunk_count

@@ -26,6 +26,19 @@ type ChatOrder = {
   product_name: string;
 };
 
+type ChatSession = {
+  session_id: string;
+  last_message: string;
+  updated_at: string;
+  message_count: number;
+};
+
+type HistoryMessage = {
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+};
+
 const SESSION_STORAGE_KEY = "ai-customer-agent-session-id";
 const MESSAGE_STORAGE_PREFIX = "ai-customer-agent-messages:";
 
@@ -43,6 +56,10 @@ const copy = {
   sending: "\u53d1\u9001\u4e2d...",
   thinking: "AI \u6b63\u5728\u56de\u590d...",
   newSession: "\u65b0\u5efa\u4f1a\u8bdd",
+  sessionsTitle: "\u5386\u53f2\u4f1a\u8bdd",
+  sessionsEmpty: "\u6682\u65e0\u5386\u53f2\u4f1a\u8bdd",
+  loadingSessions: "\u52a0\u8f7d\u4f1a\u8bdd\u4e2d...",
+  messagesCount: "\u6761\u6d88\u606f",
   sourcesTitle: "\u53c2\u8003\u6765\u6e90",
   chunkLabel: "\u7247\u6bb5",
   orderTitle: "\u8ba2\u5355\u4fe1\u606f",
@@ -61,13 +78,16 @@ export default function HomePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const [error, setError] = useState("");
   const [sessionId, setSessionId] = useState("");
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
 
   useEffect(() => {
     const currentSessionId = getOrCreateSessionId();
     setSessionId(currentSessionId);
     setMessages(loadStoredMessages(currentSessionId));
+    void loadSessions();
   }, []);
 
   useEffect(() => {
@@ -107,6 +127,70 @@ export default function HomePage() {
     }
   }
 
+  function buildMessagesFromHistory(historyMessages: HistoryMessage[]) {
+    return historyMessages.map((message, index) => ({
+      id: buildMessageId(message.created_at, index),
+      role: message.role,
+      content: message.content
+    }));
+  }
+
+  function buildMessageId(createdAt: string, index: number) {
+    const timestamp = Date.parse(createdAt.replace(" ", "T"));
+    return Number.isNaN(timestamp) ? Date.now() + index : timestamp + index;
+  }
+
+  async function loadSessions() {
+    setIsLoadingSessions(true);
+
+    try {
+      const response = await fetch("http://localhost:8000/api/sessions");
+      const data = (await parseJsonResponse(response)) as ChatSession[] | { detail?: string };
+
+      if (!response.ok) {
+        throw new Error("detail" in data ? data.detail : copy.error);
+      }
+
+      setSessions(Array.isArray(data) ? data : []);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : copy.error);
+    } finally {
+      setIsLoadingSessions(false);
+    }
+  }
+
+  async function handleSelectSession(nextSessionId: string) {
+    if (isSending || nextSessionId === sessionId) {
+      return;
+    }
+
+    window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+    setSessionId(nextSessionId);
+    setMessages(loadStoredMessages(nextSessionId));
+    setInput("");
+    setError("");
+
+    try {
+      const response = await fetch(
+        `http://localhost:8000/api/sessions/${encodeURIComponent(nextSessionId)}/messages`
+      );
+      const data = (await parseJsonResponse(response)) as HistoryMessage[] | { detail?: string };
+
+      if (!response.ok) {
+        throw new Error("detail" in data ? data.detail : copy.error);
+      }
+
+      const historyMessages = Array.isArray(data) ? buildMessagesFromHistory(data) : [];
+      setMessages(historyMessages);
+      window.localStorage.setItem(
+        getMessageStorageKey(nextSessionId),
+        JSON.stringify(historyMessages)
+      );
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : copy.error);
+    }
+  }
+
   function handleNewSession() {
     const newSessionId = window.crypto.randomUUID();
     window.localStorage.setItem(SESSION_STORAGE_KEY, newSessionId);
@@ -129,56 +213,194 @@ export default function HomePage() {
       role: "user",
       content
     };
+    const assistantMessageId = Date.now() + 1;
+    const currentSessionId = sessionId || getOrCreateSessionId();
 
-    setMessages((currentMessages) => [...currentMessages, userMessage]);
+    setMessages((currentMessages) => [
+      ...currentMessages,
+      userMessage,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "",
+        sources: []
+      }
+    ]);
     setInput("");
     setError("");
     setIsSending(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/chat", {
+      const response = await fetch("http://localhost:8000/api/chat/stream", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
           message: content,
-          session_id: sessionId || getOrCreateSessionId()
+          session_id: currentSessionId
         })
       });
 
-      const data = (await parseJsonResponse(response)) as {
-        reply?: string;
-        session_id?: string;
-        sources?: ChatSource[];
-        order?: ChatOrder | null;
-        detail?: string;
-      };
-
       if (!response.ok) {
+        const data = (await parseJsonResponse(response)) as { detail?: string };
         throw new Error(data.detail || "Chat request failed");
       }
 
-      setMessages((currentMessages) => [
-        ...currentMessages,
-        {
-          id: Date.now() + 1,
-          role: "assistant",
-          content: data.reply || "",
-          sources: data.sources || [],
-          order: data.order || null
-        }
-      ]);
+      await readChatStream(response, assistantMessageId);
     } catch (caughtError) {
+      setMessages((currentMessages) =>
+        currentMessages.filter((message) => message.id !== assistantMessageId)
+      );
       setError(caughtError instanceof Error ? caughtError.message : copy.error);
     } finally {
       setIsSending(false);
+      void loadSessions();
+    }
+  }
+
+  async function readChatStream(response: Response, assistantMessageId: number) {
+    if (!response.body) {
+      throw new Error(copy.error);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split("\n\n");
+      buffer = events.pop() || "";
+
+      for (const rawEvent of events) {
+        handleStreamEvent(rawEvent, assistantMessageId);
+      }
+    }
+
+    if (buffer.trim()) {
+      handleStreamEvent(buffer, assistantMessageId);
+    }
+  }
+
+  function handleStreamEvent(rawEvent: string, assistantMessageId: number) {
+    const lines = rawEvent.split("\n");
+    const eventName = lines
+      .find((line) => line.startsWith("event:"))
+      ?.replace("event:", "")
+      .trim();
+    const dataText = lines
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.replace("data:", "").trim())
+      .join("");
+
+    if (!eventName || !dataText) {
+      return;
+    }
+
+    const data = JSON.parse(dataText) as {
+      content?: string;
+      reply?: string;
+      sources?: ChatSource[];
+      order?: ChatOrder | null;
+      session_id?: string;
+      detail?: string;
+    };
+
+    if (eventName === "error") {
+      throw new Error(data.detail || copy.error);
+    }
+
+    if (eventName === "metadata") {
+      setMessages((currentMessages) =>
+        currentMessages.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                sources: data.sources || []
+              }
+            : message
+        )
+      );
+      return;
+    }
+
+    if (eventName === "delta") {
+      setMessages((currentMessages) =>
+        currentMessages.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                content: `${message.content}${data.content || ""}`
+              }
+            : message
+        )
+      );
+      return;
+    }
+
+    if (eventName === "done") {
+      if (data.session_id) {
+        setSessionId(data.session_id);
+      }
+
+      setMessages((currentMessages) =>
+        currentMessages.map((message) =>
+          message.id === assistantMessageId
+            ? {
+                ...message,
+                content: data.reply || message.content,
+                sources: data.sources || message.sources || [],
+                order: data.order || null
+              }
+            : message
+        )
+      );
     }
   }
 
   return (
     <main className="chat-page">
-      <section className="chat-shell" aria-label="Customer service chat">
+      <section className="chat-workspace" aria-label="Customer service workspace">
+        <aside className="session-sidebar" aria-label="Chat sessions">
+          <div className="session-sidebar-header">
+            <h2>{copy.sessionsTitle}</h2>
+            <button disabled={isLoadingSessions} onClick={() => void loadSessions()} type="button">
+              {isLoadingSessions ? copy.loadingSessions : "\u5237\u65b0"}
+            </button>
+          </div>
+
+          {sessions.length === 0 ? (
+            <p className="session-empty">{copy.sessionsEmpty}</p>
+          ) : (
+            <div className="session-list">
+              {sessions.map((session) => (
+                <button
+                  className={`session-item ${
+                    session.session_id === sessionId ? "session-item-active" : ""
+                  }`}
+                  disabled={isSending}
+                  key={session.session_id}
+                  onClick={() => void handleSelectSession(session.session_id)}
+                  type="button"
+                >
+                  <span>{session.last_message || session.session_id}</span>
+                  <small>
+                    {session.message_count} {copy.messagesCount} -{" "}
+                    {formatSessionTime(session.updated_at)}
+                  </small>
+                </button>
+              ))}
+            </div>
+          )}
+        </aside>
+
+        <section className="chat-shell" aria-label="Customer service chat">
         <header className="chat-header">
           <div>
             <h1>{copy.title}</h1>
@@ -207,7 +429,10 @@ export default function HomePage() {
                 <span className="message-label">
                   {message.role === "user" ? copy.userLabel : copy.assistantLabel}
                 </span>
-                <p>{message.content}</p>
+                <p>
+                  {message.content ||
+                    (message.role === "assistant" && isSending ? copy.thinking : "")}
+                </p>
                 {message.role === "assistant" && message.order ? (
                   <section className="order-card" aria-label="Order details">
                     <div className="order-card-header">
@@ -251,7 +476,7 @@ export default function HomePage() {
                         key={`${source.filename}-${source.chunk_index}`}
                       >
                         <strong>
-                          {source.filename} · {copy.chunkLabel} {source.chunk_index + 1}
+                          {source.filename} - {copy.chunkLabel} {source.chunk_index + 1}
                         </strong>
                         <p>{source.preview}</p>
                       </article>
@@ -260,12 +485,6 @@ export default function HomePage() {
                 ) : null}
               </article>
               ))}
-              {isSending ? (
-                <article className="message message-assistant message-loading">
-                  <span className="message-label">{copy.assistantLabel}</span>
-                  <p>{copy.thinking}</p>
-                </article>
-              ) : null}
             </>
           )}
         </div>
@@ -284,9 +503,26 @@ export default function HomePage() {
         </form>
 
         {error ? <p className="error-message">{error}</p> : null}
+        </section>
       </section>
     </main>
   );
+}
+
+function formatSessionTime(value: string) {
+  const normalizedValue = value.includes("T") ? value : value.replace(" ", "T");
+  const date = new Date(normalizedValue);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 async function parseJsonResponse(response: Response) {

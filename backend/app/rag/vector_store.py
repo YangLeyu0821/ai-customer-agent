@@ -16,6 +16,20 @@ def get_faq_collection() -> Any:
     )
 
 
+def reset_faq_collection() -> Any:
+    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    try:
+        client.delete_collection(name=FAQ_COLLECTION_NAME)
+    except Exception:
+        pass
+
+    return client.get_or_create_collection(
+        name=FAQ_COLLECTION_NAME,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+
 def upsert_faq_chunks(
     ids: list[str],
     chunks: list[str],

@@ -20,6 +20,7 @@
 - Admin FAQ 文档上传
 - FAQ 文档列表与删除
 - FAQ 文档切分、Embedding、写入 ChromaDB
+- FAQ 索引重建
 - 聊天时先检索 FAQ，并展示参考来源
 - 订单查询 Tool Calling
 - mock 订单数据查询
@@ -27,6 +28,7 @@
 - 基于 session_id 的多轮对话 memory
 - 前端聊天记录 localStorage 持久化
 - 后端会话 memory SQLite 持久化
+- 会话列表与历史会话切换
 
 ## 目录结构
 
@@ -151,7 +153,7 @@ http://localhost:3000/admin
 http://localhost:3000/admin
 ```
 
-3. 上传 `.txt` 或 `.md` FAQ 文件。
+3. 上传 `.txt`、`.md`、`.pdf` 或 `.docx` FAQ 文件。
 4. 上传成功后，后端会自动：
 
 ```text
@@ -184,6 +186,26 @@ http://localhost:3000
 curl http://localhost:8000/api/faq/files
 ```
 
+## 重建 FAQ 索引
+
+如果手动清理过 ChromaDB、迁移过 FAQ 文件，或想用已上传文件重新生成向量索引，可以在 Admin 页面点击“重建索引”。后端会清空并重建 FAQ collection，扫描 `backend/data/faq_uploads` 下当前支持的 `.txt`、`.md`、`.pdf`、`.docx` 文件，重新切分文本、生成 Embedding 并写入 ChromaDB。
+
+也可以直接调用接口：
+
+```bash
+curl -X POST http://localhost:8000/api/faq/reindex
+```
+
+返回示例：
+
+```json
+{
+  "file_count": 1,
+  "chunk_count": 6,
+  "message": "已重建 FAQ 索引。"
+}
+```
+
 ## 测试订单 Tool Calling
 
 聊天页面输入：
@@ -201,6 +223,30 @@ curl http://localhost:8000/api/faq/files
 ```
 
 后端会基于 `session_id` 从 SQLite 读取最近对话上下文，支持多轮追问。
+
+## 会话列表 / 历史会话管理
+
+聊天页左侧会展示已有会话列表。点击某个会话后，前端会切换当前 `session_id`，并调用后端读取该会话的历史消息恢复到聊天窗口。
+
+后端会话管理接口：
+
+```text
+GET /api/sessions
+GET /api/sessions/{session_id}/messages
+```
+
+`GET /api/sessions` 返回字段：
+
+```json
+[
+  {
+    "session_id": "demo-session",
+    "last_message": "好的，我帮你查询订单状态。",
+    "updated_at": "2026-05-17 12:00:00",
+    "message_count": 6
+  }
+]
+```
 
 ## Mock 订单号
 
@@ -232,30 +278,51 @@ curl http://localhost:8000/api/faq/files
 ```text
 GET    /health
 GET    /debug/openai-config
+GET    /api/sessions
+GET    /api/sessions/{session_id}/messages
 POST   /api/chat
+POST   /api/chat/stream
 GET    /api/faq/files
 POST   /api/faq/upload
+POST   /api/faq/reindex
 DELETE /api/faq/files/{filename}
 ```
+
+## 流式输出
+
+聊天页会优先调用：
+
+```text
+POST /api/chat/stream
+```
+
+该接口使用 Server-Sent Events 返回流式数据：
+
+```text
+metadata  返回 session_id 和 FAQ sources
+delta     返回回复文本分片
+done      返回最终 reply、sources、order
+error     返回后端错误信息
+```
+
+RAG 检索、Memory 读取和订单 Tool Calling 会先在后端完成，然后前端逐字或分片展示最终回复。原有非流式接口 `POST /api/chat` 仍然保留，可用于调试或兼容旧客户端。
 
 ## 当前限制
 
 - Admin 没有登录鉴权。
-- FAQ 只支持 `.txt` 和 `.md`。
+- FAQ 支持 `.txt`、`.md`、`.pdf` 和 `.docx`，但扫描版 PDF 需要先 OCR 成可提取文本。
 - 订单数据是 mock 数据，没有接真实电商系统。
 - ChromaDB、SQLite 和上传文件都使用本地持久化。
-- 后端 memory 已持久化到 SQLite，但没有会话列表 API。
+- 后端 memory 已持久化到 SQLite，会话列表读取当前保存的最近消息。
 - Tool Calling 当前只有订单查询一个工具。
 - 没有完整自动化测试。
 
 ## 后续规划
 
 - Admin 登录鉴权
-- FAQ 重建索引
-- 支持 PDF / DOCX 文档解析
 - 接入真实订单系统
 - 人工客服接管
-- 会话列表与客服工作台
+- 客服工作台
 - Docker Compose 一键启动
 - 单元测试与接口测试
 - 部署到云服务器并提供在线演示
@@ -269,6 +336,8 @@ backend/data/examples/sample_faq.md
 ```
 
 该文件包含退货、换货、物流、发票、售后联系方式等 FAQ 内容。它不会自动写入 ChromaDB，需要通过 Admin 页面手动上传。
+
+PDF / DOCX FAQ 也可以通过 Admin 页面上传。后端会先提取 PDF / DOCX 中的文本，然后复用同一套切分、Embedding 和 ChromaDB 写入流程。
 
 测试步骤：
 

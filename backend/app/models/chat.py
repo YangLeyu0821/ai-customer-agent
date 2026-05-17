@@ -27,3 +27,16 @@ class ChatResponse(BaseModel):
     session_id: str
     sources: list[ChatSource] = []
     order: ChatOrder | None = None
+
+
+class ChatSessionSummary(BaseModel):
+    session_id: str
+    last_message: str
+    updated_at: str
+    message_count: int
+
+
+class ChatHistoryMessage(BaseModel):
+    role: str
+    content: str
+    created_at: str

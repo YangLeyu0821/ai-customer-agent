@@ -1,4 +1,9 @@
 import re
+from io import BytesIO
+from pathlib import Path
+
+from docx import Document
+from pypdf import PdfReader
 
 CHUNK_SIZE = 700
 CHUNK_OVERLAP = 100
@@ -12,6 +17,47 @@ def decode_document(content: bytes) -> str:
             continue
 
     return content.decode("utf-8", errors="ignore")
+
+
+def extract_document_text(filename: str, content: bytes) -> str:
+    extension = Path(filename).suffix.lower()
+
+    if extension in {".txt", ".md"}:
+        return decode_document(content)
+    if extension == ".pdf":
+        return extract_pdf_text(content)
+    if extension == ".docx":
+        return extract_docx_text(content)
+
+    raise ValueError("Unsupported FAQ file type.")
+
+
+def extract_pdf_text(content: bytes) -> str:
+    try:
+        reader = PdfReader(BytesIO(content))
+        pages = [page.extract_text() or "" for page in reader.pages]
+    except Exception as exc:
+        raise ValueError("Unable to parse PDF text.") from exc
+
+    return "\n\n".join(page.strip() for page in pages if page.strip())
+
+
+def extract_docx_text(content: bytes) -> str:
+    try:
+        document = Document(BytesIO(content))
+    except Exception as exc:
+        raise ValueError("Unable to parse DOCX text.") from exc
+
+    parts: list[str] = []
+    parts.extend(paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip())
+
+    for table in document.tables:
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+            if cells:
+                parts.append(" | ".join(cells))
+
+    return "\n\n".join(parts)
 
 
 def normalize_text(text: str) -> str:

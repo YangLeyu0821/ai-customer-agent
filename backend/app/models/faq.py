@@ -18,3 +18,9 @@ class FaqUploadResponse(BaseModel):
 class FaqDeleteResponse(BaseModel):
     filename: str
     message: str
+
+
+class FaqReindexResponse(BaseModel):
+    file_count: int
+    chunk_count: int
+    message: str
