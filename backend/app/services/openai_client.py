@@ -53,6 +53,26 @@ class OpenAIUpstreamError(OpenAIServiceError):
     pass
 
 
+def extract_display_order(tool_result: dict[str, str | bool]) -> dict[str, str] | None:
+    if not tool_result.get("found"):
+        return None
+
+    required_fields = [
+        "order_id",
+        "status",
+        "logistics_status",
+        "estimated_delivery",
+        "carrier",
+        "tracking_number",
+        "product_name",
+    ]
+
+    if not all(field in tool_result for field in required_fields):
+        return None
+
+    return {field: str(tool_result[field]) for field in required_fields}
+
+
 def get_openai_runtime_config() -> dict[str, str | bool | float]:
     settings = get_settings()
 
@@ -116,7 +136,11 @@ def map_openai_exception(exc: Exception) -> OpenAIServiceError | None:
     return None
 
 
-def generate_customer_service_reply(message: str, faq_context: str = "") -> str:
+def generate_customer_service_reply(
+    message: str,
+    faq_context: str = "",
+    history: list[dict[str, str]] | None = None,
+) -> dict[str, object]:
     if not get_settings().openai_api_key.strip():
         raise MissingOpenAIKeyError("OPENAI_API_KEY is not configured.")
 
@@ -138,8 +162,10 @@ def generate_customer_service_reply(message: str, faq_context: str = "") -> str:
                 "role": "system",
                 "content": system_prompt,
             },
-            {"role": "user", "content": message},
         ]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": message})
         response = client.chat.completions.create(
             model=get_settings().openai_model,
             messages=messages,
@@ -155,6 +181,7 @@ def generate_customer_service_reply(message: str, faq_context: str = "") -> str:
 
     assistant_message = response.choices[0].message
     tool_calls = assistant_message.tool_calls or []
+    display_order: dict[str, str] | None = None
 
     if tool_calls:
         messages.append(assistant_message.model_dump(exclude_none=True))
@@ -170,6 +197,7 @@ def generate_customer_service_reply(message: str, faq_context: str = "") -> str:
 
             order_id = str(arguments.get("order_id", "")).strip()
             tool_result = get_order_status(order_id)
+            display_order = extract_display_order(tool_result) or display_order
 
             messages.append(
                 {
@@ -196,4 +224,4 @@ def generate_customer_service_reply(message: str, faq_context: str = "") -> str:
     if not reply:
         raise OpenAIUpstreamError("OpenAI returned an empty response.")
 
-    return reply
+    return {"reply": reply, "order": display_order}

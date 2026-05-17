@@ -25,3 +25,35 @@ def format_faq_context(matches: list[dict[str, object]]) -> str:
             parts.append(f"[FAQ {index} | {source}]\n{document}")
 
     return "\n\n".join(parts)
+
+
+def build_faq_sources(matches: list[dict[str, object]], preview_length: int = 140) -> list[dict[str, str | int]]:
+    sources: list[dict[str, str | int]] = []
+    seen: set[tuple[str, int]] = set()
+
+    for match in matches:
+        metadata = match.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            continue
+
+        filename = str(metadata.get("filename") or metadata.get("saved_as") or "FAQ")
+        chunk_index = int(metadata.get("chunk_index", 0))
+        key = (filename, chunk_index)
+        if key in seen:
+            continue
+
+        document = str(match.get("document", "")).strip()
+        preview = document[:preview_length]
+        if len(document) > preview_length:
+            preview += "..."
+
+        sources.append(
+            {
+                "filename": filename,
+                "chunk_index": chunk_index,
+                "preview": preview,
+            }
+        )
+        seen.add(key)
+
+    return sources

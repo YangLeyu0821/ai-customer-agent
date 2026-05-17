@@ -39,6 +39,11 @@ def get_faq_chunk_count() -> int:
     return collection.count()
 
 
+def delete_faq_chunks_by_file(saved_as: str) -> None:
+    collection = get_faq_collection()
+    collection.delete(where={"saved_as": saved_as})
+
+
 def query_faq_chunks(query_embedding: list[float], top_k: int = 4) -> list[dict[str, Any]]:
     collection = get_faq_collection()
     result = collection.query(

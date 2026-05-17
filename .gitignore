@@ -16,3 +16,4 @@ build/
 # Data
 backend/data/chroma/
 backend/data/faq_uploads/
+backend/data/app.db

@@ -4,10 +4,11 @@ from fastapi import HTTPException
 from fastapi import UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.models.chat import ChatRequest, ChatResponse
-from app.models.faq import FaqUploadResponse
-from app.rag.retriever import format_faq_context, retrieve_faq_context
-from app.services.faq_service import save_faq_upload
+from app.models.chat import ChatOrder, ChatRequest, ChatResponse, ChatSource
+from app.models.faq import FaqDeleteResponse, FaqFile, FaqUploadResponse
+from app.rag.retriever import build_faq_sources, format_faq_context, retrieve_faq_context
+from app.services.faq_service import delete_faq_file, list_faq_files, save_faq_upload
+from app.services.memory_service import append_turn, get_recent_messages
 from app.services.openai_client import (
     MissingOpenAIKeyError,
     OpenAIRateLimitError,
@@ -42,6 +43,20 @@ def debug_openai_config() -> dict[str, str | bool | float]:
     return get_openai_runtime_config()
 
 
+@app.get("/api/faq/files", response_model=list[FaqFile])
+def get_faq_files() -> list[FaqFile]:
+    return [FaqFile(**file) for file in list_faq_files()]
+
+
+@app.delete("/api/faq/files/{filename}", response_model=FaqDeleteResponse)
+def delete_faq(filename: str) -> FaqDeleteResponse:
+    deleted_filename = delete_faq_file(filename)
+    return FaqDeleteResponse(
+        filename=deleted_filename,
+        message="\u6587\u4ef6\u5df2\u5220\u9664\uff0c\u5bf9\u5e94 ChromaDB chunks \u5df2\u6e05\u7406\u3002",
+    )
+
+
 @app.post("/api/faq/upload", response_model=FaqUploadResponse)
 async def upload_faq(file: UploadFile = File(...)) -> FaqUploadResponse:
     try:
@@ -73,7 +88,16 @@ def chat(request: ChatRequest) -> ChatResponse:
     try:
         matches = retrieve_faq_context(request.message)
         faq_context = format_faq_context(matches)
-        reply = generate_customer_service_reply(request.message, faq_context=faq_context)
+        sources = [ChatSource(**source) for source in build_faq_sources(matches)]
+        history = get_recent_messages(request.session_id)
+        result = generate_customer_service_reply(
+            request.message,
+            faq_context=faq_context,
+            history=history,
+        )
+        reply = str(result["reply"])
+        order = ChatOrder(**result["order"]) if result.get("order") else None
+        append_turn(request.session_id, request.message, reply)
     except MissingOpenAIKeyError as exc:
         raise HTTPException(
             status_code=500,
@@ -90,4 +114,9 @@ def chat(request: ChatRequest) -> ChatResponse:
             detail=str(exc),
         ) from exc
 
-    return ChatResponse(reply=reply)
+    return ChatResponse(
+        reply=reply,
+        session_id=request.session_id,
+        sources=sources,
+        order=order,
+    )
